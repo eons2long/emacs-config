@@ -55,3 +55,8 @@
 (unpin! geiser geiser-racket)
 (package! geiser)
 (package! geiser-racket)
+;; Force Doom to use a modern transient directly from magit/transient
+;; ~/.doom.d/packages.el
+(package! shell-maker)   ;
+(package! acp)           ;
+(package! agent-shell)   ;

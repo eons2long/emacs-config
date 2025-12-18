@@ -1,5 +1,3 @@
-;;; $DOOMDIR/config.el -*- lexical-binding: t; -*-
-
 ;; Place your private configuration here! Remember, you do not need to run 'doom
 ;; sync' after modifying this file!
 ;; ANDRIOD Specail Setting
@@ -94,6 +92,7 @@
   "Prompt for a project and set capture target to its Daily Progress Log heading."
   (let* ((project-list '("guanyin25"
                          "coca-2w-words"
+                         "kiss-grd-100h"
                          ))
          (project (completing-read "Choose Project: " project-list nil t))
          (file (expand-file-name (format "projects/%s.org" project)
@@ -113,8 +112,8 @@
            (file+headline ,yx-org-inbox "Inbox")
            "* TODO %?")
         ("p" "Progress" entry
-         (file yx/org-capture-progress-file)
-         "*** %<%Y-%m-%d %a> - %? \n:PROPERTIES:\n:Date: %<%Y-%m-%d>\n:Count: \n:END:"
+         (file+headline yx/org-capture-progress-file "Progress Log")
+         "* %<%Y-%m-%d %a> - %? \n:PROPERTIES:\n:Date: %<%Y-%m-%d>\n:Count: \n:END:"
          :empty-lines 1)
                     ))
   (setq! org-refile-targets '((org-agenda-files . (:maxlevel . 3))))
@@ -122,6 +121,10 @@
   (setq! org-outline-path-complete-in-steps nil)
   ;; add done-log for org
   (setq org-log-done 'time)
+  ;; setting GTD workflow
+  (setq org-todo-keywords
+        '((sequence "TODO(t)" "NEXT(n)" "|" "DONE(d)")
+          (sequence "WAITING(w)" "BLOCKED(b)" "|" "CANCELLED(c)")))
   )
 
 ;; Whenever you reconfigure a package, make sure to wrap your config in an
