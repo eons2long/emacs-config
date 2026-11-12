@@ -1,32 +1,58 @@
 ;; Place your private configuration here! Remember, you do not need to run 'doom
 ;; sync' after modifying this file!
-;; ANDRIOD Specail Setting
+;; Android specific settings.
 (defconst +on-termux-android
   (or (string-match-p "android" system-configuration)
           (getenv "TERMUX_VERSION")
           (file-directory-p "/data/data/com.termux/files")))
 
-(after! dired
-  (ignore-errors
-    (advice-remove #'dired-find-file #'dirvish-find-entry-a)))
-
 ;; Hide owner/group columns on the narrow Termux display.
 (when +on-termux-android
   (after! dired
-  (setq dired-hide-details-initially t)
-  (add-hook! 'dired-mode-hook :append #'dired-hide-details-mode )
-  (add-hook! 'dired-after-readin-hook :append #'dired-hide-details-mode)
-
-  (setq dired-listing-switches "-Alh --group-directories-first -g -o"))
-)
+    (ignore-errors
+      (advice-remove #'dired-find-file #'dirvish-find-entry-a))
+    (setq dired-hide-details-initially t)
+    (add-hook! 'dired-mode-hook :append #'dired-hide-details-mode)
+    (add-hook! 'dired-after-readin-hook :append #'dired-hide-details-mode)
+    (setq dired-listing-switches "-Alh --group-directories-first -g -o")))
 
 ;; add lisp dir
-(add-to-list 'load-path (expand-file-name "lisp" doom-user-dir))
-(require 'notes-sync)
+(load! "lisp/notes-sync")
+(defvar my-stopwatch--started-at nil
+  "Start time of the active stopwatch, or nil when it is stopped.")
+
+(defun my-stopwatch ()
+  "Start the stopwatch, or insert elapsed time at point and reset it."
+  (interactive)
+  (if my-stopwatch--started-at
+      (let* ((elapsed (max 0
+                           (truncate
+                            (float-time
+                             (time-subtract (current-time)
+                                            my-stopwatch--started-at)))))
+             (hours (/ elapsed 3600))
+             (minutes (if (zerop hours)
+                          (/ elapsed 60)
+                        (% (/ elapsed 60) 60)))
+             (seconds (% elapsed 60))
+             (result (if (zerop hours)
+                         (format "- %02d:%02d" minutes seconds)
+                       (format "- %02d:%02d:%02d" hours minutes seconds))))
+        (insert result)
+        (setq my-stopwatch--started-at nil)
+        (when (and (fboundp 'evil-normal-state-p)
+                   (evil-normal-state-p))
+          (evil-insert-state)))
+    (setq my-stopwatch--started-at (current-time))
+    (message "Stopwatch started.")))
+
+(map! :g "<f8>" #'my-stopwatch)
+
 (map! :leader
       (:prefix ("r" . "Run/Sync")
        :desc "Sync notes push" "s" #'my/sync-note-push
-       :desc "Sync notes pull" "p" #'my/sync-note-pull))
+       :desc "Sync notes pull" "p" #'my/sync-note-pull
+       :desc "Cancel note sync" "c" #'my/sync-note-cancel))
 ;; Some functionality uses this to identify you, e.g. GPG configuration, email
 ;; clients, file templates and snippets. It is optional.
 ;; (setq user-full-name "John Doe"
@@ -57,14 +83,11 @@
 ;; `load-theme' function. This is the default:
 ;;(setq doom-theme 'doom-one)
 (setq doom-theme 'doom-dracula)
-
 ;; This determines the style of line numbers in effect. If set to `nil', line
 ;; numbers are disabled. For relative line numbers, set this to `relative'.
 (setq display-line-numbers-type t)
-
 ;; If you use `org' and don't want your org files in the default location below,
 ;; change `org-directory'. It must be set before org loads!
-
 ;; change `org-directory'. It must be set before org loads!
 (defconst yx-home
   (or (getenv "HOME") (getenv "USERPROFILE"))
@@ -78,10 +101,10 @@
 (defconst yx-org-base
   (cond
    ((eq system-type 'darwin) (yx-path yx-home "Nutstore Files/Obsidian/org"))
-   ((or (eq system-type 'gnu/linux)
-        (string-match-p "android" system-configuration))
+   (+on-termux-android
 ;;    "/storage/emulated/0/Documents/obsidian/Obsidian/org")
       "/storage/emulated/0/ob/Obsidian/org")
+   ((eq system-type 'gnu/linux) (yx-path yx-home "org"))
    (t (yx-path yx-home "org")))
   "Root of all org file across platforms.")
 
@@ -133,8 +156,8 @@
   ;; -----------------------------------------------------------------------
   ;; 1. basic path setting
   ;; -----------------------------------------------------------------------
-  (setq org-roam-directory yx-org-base
-        org-roam-db-location (expand-file-name "org-roam.db" yx-org-base))
+  (setq org-roam-directory (expand-file-name "roam" yx-org-base)
+        org-roam-db-location (expand-file-name "org-roam.db" org-roam-directory))
   ;; -----------------------------------------------------------------------
   ;; 2. Normal Note  Capture template
   ;; -----------------------------------------------------------------------
@@ -153,14 +176,58 @@
            ;;:unnarrowed t
            :immediate-finish nil
            )))
+  (defun yx/org-daily-directory-for-time (time)
+    "Return the personal daily directory for TIME."
+    (let ((year-dir (expand-file-name (format-time-string "%Y年日志" time) yx-org-base)))
+      (if (file-directory-p year-dir)
+          year-dir
+        (expand-file-name "daily" yx-org-base))))
+
+  (defun yx/org-daily-file-for-time (time)
+    "Return the personal daily file path for TIME."
+    (expand-file-name (format-time-string "%Y-%m-%d.org" time)
+                      (yx/org-daily-directory-for-time time)))
+
+  (defun yx/org-open-daily-for-time (time)
+    "Open the personal daily file for TIME."
+    (let ((file (yx/org-daily-file-for-time time)))
+      (make-directory (file-name-directory file) t)
+      (unless (file-exists-p file)
+        (with-temp-file file
+          (insert (format "#+title: %s\n#+date: %s\n\n"
+                          (format-time-string "%Y-%m-%d" time)
+                          (format-time-string "%Y-%m-%d" time)))))
+      (find-file file)
+      (unless (derived-mode-p 'org-mode)
+        (org-mode))))
+
+  (defun yx/org-open-daily-date (time)
+    "Open a personal daily file selected by date."
+    (interactive (list (org-read-date nil t nil "Daily date: ")))
+    (yx/org-open-daily-for-time time))
+
+  (defun yx/org-open-daily-today ()
+    "Open today's personal daily file."
+    (interactive)
+    (yx/org-open-daily-for-time (current-time)))
+
+  (defun yx/org-open-daily-tomorrow ()
+    "Open tomorrow's personal daily file."
+    (interactive)
+    (yx/org-open-daily-for-time (time-add (current-time) (days-to-time 1))))
+
+  (defun yx/org-open-daily-yesterday ()
+    "Open yesterday's personal daily file."
+    (interactive)
+    (yx/org-open-daily-for-time (time-subtract (current-time) (days-to-time 1))))
   ;; -----------------------------------------------------------------------
   (map! :leader
         (:prefix ("t" . "Notes")
-         :desc "Find daily"      "d" #'org-roam-dailies-goto-date
-         :desc "Find tomorrow"   "t" #'org-roam-dailies-goto-tomorrow
-         :desc "Find yesterday"  "y" #'org-roam-dailies-goto-yesterday
-         :desc "Find today"      "n" #'org-roam-dailies-goto-today
-         :desc "Capture today"   "N" #'org-roam-dailies-capture-today
+         :desc "Find daily"      "d" #'yx/org-open-daily-date
+         :desc "Find tomorrow"   "t" #'yx/org-open-daily-tomorrow
+         :desc "Find yesterday"  "y" #'yx/org-open-daily-yesterday
+         :desc "Find today"      "n" #'yx/org-open-daily-today
+         :desc "Capture today"   "N" #'yx/org-open-daily-today
          :desc "Find node"       "f" #'org-roam-node-find
          :desc "Insert node"     "i" #'org-roam-node-insert)))
 
@@ -209,6 +276,58 @@
   '(region :background "#44475a" :foreground "#ffffff")
   ;; '(region :background "#6272a4" :foreground "#ffffff")
 )
+
+;; Preview Markdown images in terminal Emacs via iTerm2's imgcat protocol.
+(after! markdown-mode
+  (require 'subr-x)
+
+  (defvar yx/imgcat-width "80%")
+
+  (defun yx/imgcat-executable ()
+    (or (executable-find "imgcat")
+        (let ((imgcat (expand-file-name "~/.local/bin/imgcat")))
+          (when (file-executable-p imgcat)
+            imgcat))))
+
+  (defun yx/markdown-image-target-at-point ()
+    (or
+     (save-excursion
+       (let ((pos (point))
+             target)
+         (goto-char (line-beginning-position))
+         (while (and (not target)
+                     (re-search-forward "!\\[[^]\n]*\\](\\s-*\\([^)\n\t ]+\\)" (line-end-position) t))
+           (when (or (and (<= (match-beginning 0) pos)
+                          (<= pos (match-end 0)))
+                     (not target))
+             (setq target (match-string-no-properties 1))))
+         (when target
+           (string-trim target "<" ">"))))
+     (thing-at-point 'url t)))
+
+  (defun yx/markdown-preview-image-at-point ()
+    (interactive)
+    (let* ((target (yx/markdown-image-target-at-point))
+           (imgcat (yx/imgcat-executable)))
+      (unless target
+        (user-error "No Markdown image URL found on this line"))
+      (unless imgcat
+        (user-error "imgcat executable not found"))
+      (let ((args (append (list "-n" "-r" "-W" yx/imgcat-width)
+                          (if (string-match-p "\\`https?://" target)
+                              (list "-u" target)
+                            (list "-f" (expand-file-name target))))))
+        (with-temp-buffer
+          (let ((status (apply #'call-process imgcat nil (list t t) nil args)))
+            (unless (eq status 0)
+              (user-error "imgcat failed: %s" (string-trim (buffer-string))))
+            (send-string-to-terminal (buffer-string))
+            (message "Sent image preview to iTerm"))))))
+
+  (map! :map markdown-mode-map
+        :localleader
+        :desc "Preview image with imgcat" "p i" #'yx/markdown-preview-image-at-point))
+
 ;;set the clipboard for macos
 ;;; --- macOS Specific Settings ---
 (when (and (string-equal system-type "darwin") (not (display-graphic-p)))
@@ -221,8 +340,9 @@
   (defun paste-from-osx-clipboard ()
     "Read and return content from the macOS clipboard."
     (with-temp-buffer
-      (call-process "pbpaste" nil t nil)
-      (buffer-string)))
+      (when (and (zerop (call-process "pbpaste" nil t nil))
+                 (> (buffer-size) 0))
+        (buffer-string))))
 
   (setq interprogram-cut-function #'copy-to-osx-clipboard)
   (setq interprogram-paste-function #'paste-from-osx-clipboard))
@@ -233,11 +353,20 @@
 (when (string-equal system-type "darwin")
 
 (use-package! exec-path-from-shell
-  :when (memq window-system '(mac ns))
+  :if (eq system-type 'darwin)
   :config
-  (dolist (var '("PATH" "HW_API_KEY" "OPENROUTER_API_KEY"))
+  (dolist (var '("PATH" "HW_API_KEY" "OPENROUTER_API_KEY" "DEEPSEEK_API_KEY"))
     (add-to-list 'exec-path-from-shell-variables var))
-  (exec-path-from-shell-initialize))
+  (exec-path-from-shell-initialize)
+  ;; Keep Cargo, rustc, and rust-analyzer on the same rustup toolchain.
+  (let ((cargo-bin (expand-file-name "~/.cargo/bin")))
+    (setq exec-path (cons cargo-bin (remove cargo-bin exec-path)))
+    (setenv "PATH"
+            (mapconcat #'identity
+                       (cons cargo-bin
+                             (remove cargo-bin
+                                     (split-string (getenv "PATH") path-separator)))
+                       path-separator))))
 
 (after! geiser
   (setq geiser-active-implementations '(racket)
@@ -245,58 +374,90 @@
       geiser-racket-binary "/Applications/Racket v8.18/bin/racket"
       geiser-repl-per-project-p t)
 )
-;; for agent-shell
-(after! agent-shell
-(setq agent-shell-google-authentication (agent-shell-google-make-authentication :login t)))
-
 ;; for minuet
 (use-package! minuet
   :defer t
   :init
   (add-hook 'prog-mode-hook #'minuet-auto-suggestion-mode)
   :config
-  (setq minuet-provider 'openai-compatible
+  (setq minuet-provider 'openai-fim-compatible
         minuet-request-timeout 10
         minuet-show-error-message-on-minibuffer t
-        minuet-auto-suggestion-throttle-delay 1.5
-        minuet-auto-suggestion-debounce-delay 0.6
+        minuet-auto-suggestion-throttle-delay 1.8
+        minuet-auto-suggestion-debounce-delay 0.7
         minuet-n-completions 1
         minuet-context-window 768)
 
-  (plist-put minuet-openai-compatible-options :name "Huawei-DeepSeek-V3.2")
-  (plist-put minuet-openai-compatible-options
-             :end-point "https://api.modelarts-maas.com/v2/chat/completions")
-  (plist-put minuet-openai-compatible-options :api-key "HW_API_KEY")
-  (plist-put minuet-openai-compatible-options :model "deepseek-v3.2-vy7ggp")
-  (minuet-set-optional-options minuet-openai-compatible-options :max_tokens 96)
-  (minuet-set-optional-options minuet-openai-compatible-options :top_p 0.9)
+  (plist-put minuet-openai-fim-compatible-options :name "DeepSeek-V4.1-Flash")
+  (plist-put minuet-openai-fim-compatible-options
+             :end-point "https://api.deepseek.com/beta/completions")
+  (plist-put minuet-openai-fim-compatible-options :api-key "DEEPSEEK_API_KEY")
+  (plist-put minuet-openai-fim-compatible-options :model "deepseek-flash")
+  (minuet-set-optional-options minuet-openai-fim-compatible-options :max_tokens 96)
+  (minuet-set-optional-options minuet-openai-fim-compatible-options :top_p 0.9)
+
+  (defun yx-minuet-accept-suggestion-word ()
+    "Accept one identifier or punctuation character from Minuet."
+    (interactive)
+    (when-let* ((_ minuet--current-overlay)
+                (suggestion
+                 (nth minuet--current-suggestion-index
+                      minuet--current-suggestions)))
+      (let* ((end
+              (if (string-match
+                   "\\`[[:space:]]*\\(?:[[:alnum:]_]+\\|[^[:space:]]\\)"
+                   suggestion)
+                  (match-end 0)
+                (length suggestion)))
+             (accepted (substring suggestion 0 end))
+             (remaining (substring suggestion end)))
+        ;; Minuet recognizes its commands by name to avoid fresh AI requests.
+        (setq this-command 'minuet-accept-suggestion)
+        (minuet--cleanup-suggestion)
+        (insert accepted)
+        (unless (string-empty-p remaining)
+          (minuet--display-suggestion (list remaining) 0)))))
 
   (map! :map minuet-active-mode-map
         "M-p" #'minuet-previous-suggestion
         "M-n" #'minuet-next-suggestion
-        "M-]" #'minuet-accept-suggestion
-        "M-[" #'minuet-accept-suggestion-line
+        "M-f" #'yx-minuet-accept-suggestion-word
+        "M-L" #'minuet-accept-suggestion
+        "M-l" #'minuet-accept-suggestion-line
         "M-e" #'minuet-dismiss-suggestion)
 
   (map! :i "M-i" #'minuet-show-suggestion
         :i "M-y" #'minuet-complete-with-minibuffer))
+
+(defun yx-corfu-completion-active-p (&rest _)
+  "Return non-nil while Corfu is completing in the current buffer."
+  (and (bound-and-true-p corfu-mode)
+       (bound-and-true-p completion-in-region-mode)))
+
+(defun yx-minuet-dismiss-for-corfu (&rest _)
+  "Clear Minuet suggestions and pending requests when Corfu opens."
+  (minuet-dismiss-suggestion))
+
+(after! minuet
+  (add-hook 'minuet-auto-suggestion-block-predicates
+            #'yx-corfu-completion-active-p)
+  ;; A late streaming response must not recreate grey text over Corfu.
+  (advice-add 'minuet--display-suggestion :before-until
+              #'yx-corfu-completion-active-p)
+  (after! corfu
+    (advice-add 'corfu--popup-show :before
+                #'yx-minuet-dismiss-for-corfu)))
 
 ;; for gptel
 (use-package! gptel
   :init
   (load! "gptel-prompts.el")
   :config
-  (setq gptel-api-key (getenv "HW_API_KEY"))
-  (setq gptel-model 'deepseek-v3.2)
+  (setq gptel-model 'gpt-5.6-luna)
+  (setq gptel-include-reasoning nil)
 
-  (gptel-make-openai "Huawei-DeepSeek-V3.2"
-    :host "api.modelarts-maas.com"
-    :endpoint "/v2/chat/completions"
-    :stream t
-    :key (getenv "HW_API_KEY")
-    :models '(
-              (deepseek-v3.2-exp . "deepseek-v3.2-exp-BUN0bx")
-              (deepseek-v3.2     . "deepseek-v3.2-vy7ggp")))
+  (require 'gptel-openai-oauth)
+  (gptel-make-openai-oauth "OpenAI-sub")
 
   (gptel-make-ollama "Ollama"
     :host "localhost:11434"
@@ -312,13 +473,15 @@
     :stream t
     :key (getenv "OPENROUTER_API_KEY")
     :models '(
-            (gpt-5.2    . "openai/gpt-5.2")
+            (deepseek-v4-flash    . "deepseek/deepseek-v4-flash")
             (gemini-3-pro-preview . "google/gemini-3-pro-preview")
             (minimax-m2.5 . "minimax/minimax-m2.5")
             (grok-4.1-fast . "x-ai/grok-4.1-fast")
+            (grok-4.20 . "x-ai/grok-4.20")
+            (grok-4.20-multi-agent . "x-ai/grok-4.20-multi-agent")
             (gemini-3-flash-preview . "google/gemini-3-flash-preview")))
 
-  (setq gptel-backend (gptel-get-backend "Huawei-DeepSeek-V3.2")
+  (setq gptel-backend (gptel-get-backend "OpenAI-sub")
         gptel-default-mode 'org-mode)
 
   (map! :map gptel-mode-map
@@ -329,21 +492,153 @@
       :desc "GPTel send"
       "v s" #'gptel-send)
 
+(require 'seq)
+
+(defvar my-herdr-target-pane 'rightmost
+  "Target pane strategy for Herdr commands.
+Can be:
+- 'rightmost: dynamically detect the rightmost pane of the current tab.
+- A string (e.g. \"wW:p7\"): send to a specific fixed pane ID.")
+
+(defvaralias 'my-herdr-codex-target 'my-herdr-target-pane)
+
+(defun my/herdr-get-rightmost-pane ()
+  "Get the pane ID of the rightmost pane in the current Herdr tab."
+  (unless (executable-find "herdr")
+    (user-error "Cannot find herdr in exec-path"))
+  (with-temp-buffer
+    (let ((status (call-process "herdr" nil t nil "pane" "layout")))
+      (unless (and (integerp status) (zerop status))
+        (user-error "Failed to get Herdr layout (%s): %s" status (buffer-string)))
+      (goto-char (point-min))
+      (let* ((data (json-parse-buffer :object-type 'alist :array-type 'list))
+             (layout (alist-get 'layout (alist-get 'result data)))
+             (panes (alist-get 'panes layout)))
+        (unless panes
+          (user-error "No panes found in current Herdr tab"))
+        ;; If currently zoomed, return the focused zoomed pane
+        (if (eq (alist-get 'zoomed layout) t)
+            (alist-get 'focused_pane_id layout)
+          (let ((rightmost
+                 (seq-reduce
+                  (lambda (best p)
+                    (let* ((r (alist-get 'rect p))
+                           (br (alist-get 'rect best))
+                           (rx (+ (or (alist-get 'x r) 0) (or (alist-get 'width r) 0)))
+                           (brx (+ (or (alist-get 'x br) 0) (or (alist-get 'width br) 0))))
+                      (cond
+                       ((> rx brx) p)
+                       ((< rx brx) best)
+                       ;; Prefer currently focused pane when tied
+                       ((and (eq (alist-get 'focused p) t)
+                             (not (eq (alist-get 'focused best) t)))
+                        p)
+                       (t best))))
+                  (cdr panes)
+                  (car panes))))
+            (alist-get 'pane_id rightmost)))))))
+
+(defun my/herdr-codex-prompt (prompt)
+  "Send PROMPT and Enter to the target Herdr pane (default: rightmost pane in current tab)."
+  (interactive (list (read-string "Prompt for Herdr: ")))
+  (unless (executable-find "herdr")
+    (user-error "Cannot find herdr in exec-path"))
+  (let ((target (if (stringp my-herdr-target-pane)
+                    my-herdr-target-pane
+                  (my/herdr-get-rightmost-pane))))
+    (with-temp-buffer
+      (let ((status
+             (call-process "herdr" nil t nil
+                           "pane" "run" target prompt)))
+        (unless (and (integerp status) (= status 0))
+          (user-error "Herdr submission failed (%s): %s"
+                      status (buffer-string)))))
+    (message "Prompt sent to Herdr pane at %s" target)))
+
 (map! :leader
       (:prefix ("v" . "ai")
        :desc "Minuet complete" "m" #'minuet-complete-with-minibuffer
        :desc "Minuet suggest" "i" #'minuet-show-suggestion
-       :desc "Minuet configure" "M" #'minuet-configure-provider))
+       :desc "Minuet configure" "M" #'minuet-configure-provider
+       :desc "Herdr Codex prompt" "p" #'my/herdr-codex-prompt))
 
-(add-to-list 'auto-mode-alist '("\\.ets\\'" . tsx-ts-mode))
+(load! "lisp/arkts-ts-mode")
+(add-to-list 'auto-mode-alist '("\\.ets\\'" . arkts-ts-mode))
+(add-to-list 'auto-mode-alist '("/ets/.+\\.ts\\'" . arkts-ts-mode))
 (setq treesit-font-lock-level 4)
+
+(after! eglot
+  (setf (alist-get 'arkts-ts-mode eglot-server-programs nil nil #'equal)
+        `("ets-language-server" "--stdio"
+          :initializationOptions
+          (:ets (:sdkPath ,(expand-file-name "~/Library/OpenHarmony/Sdk/20"))))))
+(add-hook 'arkts-ts-mode-hook #'eglot-ensure)
+
+(add-to-list 'auto-mode-alist '("\\.rkt\\'" . racket-mode))
 
 (use-package! sdcv
   :config
-  (setq sdcv-say-word-p nil)
+  ;; `sdcv-say-word-p' is not a variable in sdcv.el, so the old setting did nothing.
+  ;; The real switch is `sdcv-word-pronounce' (default t), which blocks for a second
+  ;; and then calls espeak -- absent on macOS.
+  (setq sdcv-word-pronounce nil)
+
+  ;; Without these lists sdcv searches every installed dictionary and prints each
+  ;; hit, which buries one word under a screenful of compounds and proverbs.
+  ;; 简明英汉词典 covers English lookups, 汉语辞海 covers Chinese ones.
+  (setq sdcv-dictionary-complete-list '("简明英汉词典" "汉语辞海"))
+  (setq sdcv-dictionary-simple-list   '("简明英汉词典" "汉语辞海"))
+
+  ;; The dictionaries store their entries as XML and sdcv prints it verbatim;
+  ;; strip the markup so only the text remains.  sdcv's "Nothing similar to X"
+  ;; notice is English here, so `sdcv-filter' never matches it and would leave
+  ;; an empty buffer; fall back to an explicit message.
+  (defun yx-sdcv--strip-markup (result)
+    "Reduce sdcv RESULT to plain text."
+    (setq result (replace-regexp-in-string "<!\\[CDATA\\[\\([^]]*\\)\\]\\]>" "\\1" result))
+    (setq result (replace-regexp-in-string "</?[^<>\n]+>" "" result))
+    (setq result (replace-regexp-in-string "[ \t]*\n[ \t\n]*" "\n" result))
+    (if (string-blank-p result)
+        (format "No entry for `%s'." sdcv-current-translate-object)
+      result))
+  (unless (advice-member-p #'yx-sdcv--strip-markup #'sdcv-filter)
+    (advice-add #'sdcv-filter :filter-return #'yx-sdcv--strip-markup))
+
   (map! :leader
-    (:prefix ("d" . "dictionary")
-     :desc "Lookup typed word" "s" #'sdcv-search-input
-     :desc "Lookup word at point" "S" #'sdcv-search-pointer))
-  )
-)
+        (:prefix ("d" . "dictionary")
+         :desc "Lookup typed word" "s" #'sdcv-search-input
+         :desc "Lookup word at point" "S" #'sdcv-search-pointer))
+  ))
+
+(when (eq system-type 'darwin)
+  (defconst yx-emacs-rime-data-dir
+    (expand-file-name "rime" "~/.local/share/emacs"))
+
+  (defconst yx-liberime-core-module-file
+    (expand-file-name "../liberime/lib/liberime-core.dylib"
+                      yx-emacs-rime-data-dir))
+
+  ;; Keep librime's writable user data separate from Squirrel's LevelDB files.
+  ;; The shared directory below is Squirrel's read-only bundled Rime data only.
+  ;; Rime sync also snapshots custom YAML, so keep sync manual and private.
+  (setq liberime-user-data-dir yx-emacs-rime-data-dir
+        liberime-shared-data-dir
+        "/Library/Input Methods/Squirrel.app/Contents/SharedSupport"
+        liberime-module-file yx-liberime-core-module-file
+        liberime-load-on-require nil)
+
+  (use-package! liberime
+    :demand t
+    :config
+    (liberime-load)
+    (liberime-try-select-schema "wubi86_jidian"))
+
+  (use-package! rimel
+    :after liberime
+    :demand t
+    :init
+    (setq rimel-schema "wubi86_jidian"
+          default-input-method "rimel")
+    :config
+    (add-to-list 'rimel-disable-predicates
+                 #'rimel-predicate-prog-in-code-p)))

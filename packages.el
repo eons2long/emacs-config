@@ -56,13 +56,14 @@
 (unpin! geiser geiser-racket)
 (package! geiser)
 (package! geiser-racket)
-;; Force Doom to use a modern transient directly from magit/transient
-;; ~/.doom.d/packages.el
-(package! shell-maker)   ;
-(package! acp)           ;
-(package! agent-shell)   ;
 
 (package! gptel);
 (package! minuet)
+(package! exec-path-from-shell)
 )
 (package! sdcv)
+
+;; Rime input method: liberime is available from MELPA; Rimel is hosted on GitHub.
+(package! liberime)
+(package! rimel
+  :recipe (:host github :repo "emacs-rime/rimel"))
