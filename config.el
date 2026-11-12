@@ -578,6 +578,7 @@ Can be:
 
 (use-package! sdcv
   :config
+  (require 'subr-x)
   ;; `sdcv-say-word-p' is not a variable in sdcv.el, so the old setting did nothing.
   ;; The real switch is `sdcv-word-pronounce' (default t), which blocks for a second
   ;; and then calls espeak -- absent on macOS.
@@ -589,25 +590,96 @@ Can be:
   (setq sdcv-dictionary-complete-list '("简明英汉词典" "汉语辞海"))
   (setq sdcv-dictionary-simple-list   '("简明英汉词典" "汉语辞海"))
 
+  ;; StarDict spells phonetics in its own ASCII alphabet: `apple' is "5Apl" and
+  ;; `church' is "tFE:tF".  Map it back to IPA; `:' marks a long vowel, and a
+  ;; few symbols change value in front of it.
+  (defconst yx-sdcv-ipa-table
+    '(("A" . "æ") ("B" . "ɑ") ("C" . "ɔ") ("E" . "ə") ("F" . "ʃ")
+      ("I" . "ɪ") ("J" . "ʊ") ("L" . "ə") ("N" . "ŋ") ("Q" . "ʌ")
+      ("R" . "ɔ") ("T" . "ð") ("U" . "u") ("V" . "ʒ") ("W" . "θ")
+      ("Z" . "e") ("^" . "ɡ") ("\\" . "ɜ") ("5" . "ˈ") ("7" . "ˌ")
+      ("9" . "ˌ") ("`" . "ˈ") ("i" . "ɪ") ("u" . "ʊ") (":" . "ː"))
+    "StarDict ASCII phonetic symbols mapped to IPA.")
+
+  (defconst yx-sdcv-ipa-long-table
+    '(("E" . "ɜ") ("I" . "i") ("J" . "u") ("U" . "u") ("i" . "i") ("u" . "u"))
+    "Symbols that take a different IPA value before a length mark.")
+
+  (defun yx-sdcv-ipa (ph)
+    "Translate the StarDict phonetic PH into IPA."
+    (let ((ph (car (split-string ph "[;,]"))))       ; keep the first variant
+      (setq ph (replace-regexp-in-string "([^)]*)\\|[-() ]" "" ph))
+      (replace-regexp-in-string
+       "\\(.\\)\\(:\\)?"
+       (lambda (match)
+         (let* ((sym (substring match 0 1))
+                (long (= 2 (length match)))
+                (ipa (or (and long (cdr (assoc sym yx-sdcv-ipa-long-table)))
+                         (cdr (assoc sym yx-sdcv-ipa-table))
+                         sym)))
+           (concat ipa (if long "ː" ""))))
+       ph t)))
+
   ;; The dictionaries store their entries as XML and sdcv prints it verbatim;
   ;; strip the markup so only the text remains.  sdcv's "Nothing similar to X"
   ;; notice is English here, so `sdcv-filter' never matches it and would leave
   ;; an empty buffer; fall back to an explicit message.
   (defun yx-sdcv--strip-markup (result)
-    "Reduce sdcv RESULT to plain text."
-    (setq result (replace-regexp-in-string "<!\\[CDATA\\[\\([^]]*\\)\\]\\]>" "\\1" result))
-    (setq result (replace-regexp-in-string "</?[^<>\n]+>" "" result))
-    (setq result (replace-regexp-in-string "[ \t]*\n[ \t\n]*" "\n" result))
+    "Reduce sdcv RESULT to plain text, rendering phonetics in IPA."
+    (with-temp-buffer
+      (insert result)
+      ;; Phonetics go first: only their markup tells us what they are.
+      (goto-char (point-min))
+      (while (re-search-forward "<词典音标><!\\[CDATA\\[\\([^]]*\\)\\]\\]></词典音标>" nil t)
+        ;; `split-string' below clobbers the match data, so keep ours intact.
+        (let ((ipa (save-match-data (yx-sdcv-ipa (match-string 1)))))
+          (replace-match (if (string-blank-p ipa) "" (format "/%s/" ipa)) t t)))
+      ;; Unwrap the remaining CDATA, then drop the tags around it.
+      (goto-char (point-min))
+      (while (re-search-forward "<!\\[CDATA\\[\\([^]]*\\)\\]\\]>" nil t)
+        (replace-match (match-string 1) t t))
+      (goto-char (point-min))
+      (while (re-search-forward "</?[^<>\n]+>" nil t)
+        (replace-match "" t t))
+      ;; Collapse the runs of blank lines the tags leave behind.
+      (goto-char (point-min))
+      (while (re-search-forward "[ \t]*\n[ \t\n]*" nil t)
+        (replace-match "\n" t t))
+      (setq result (string-trim (buffer-string))))
     (if (string-blank-p result)
         (format "No entry for `%s'." sdcv-current-translate-object)
       result))
   (unless (advice-member-p #'yx-sdcv--strip-markup #'sdcv-filter)
     (advice-add #'sdcv-filter :filter-return #'yx-sdcv--strip-markup))
 
+  ;; A lookup answers in a few lines now, so show it under the minibuffer
+  ;; instead of splitting the window.  `sdcv-search-with-dictionary-args' also
+  ;; records the word for the "No entry" message above.
+  (defun yx-sdcv-entry (word)
+    "Return sdcv's entry for WORD as plain text."
+    (with-temp-buffer
+      (apply #'call-process "sdcv" nil t nil
+             (sdcv-search-with-dictionary-args
+              word sdcv-dictionary-complete-list))
+      (string-trim
+       (replace-regexp-in-string "^-->.*\n" "" (sdcv-filter (buffer-string))))))
+
+  (defun yx-sdcv-message (word)
+    "Show the dictionary entry for WORD under the minibuffer."
+    (interactive (list (read-string "Word: " nil nil (thing-at-point 'word t))))
+    (message "%s" (yx-sdcv-entry word)))
+
+  (defun yx-sdcv-message-at-point ()
+    "Show the entry for the word at point under the minibuffer."
+    (interactive)
+    (yx-sdcv-message (or (thing-at-point 'word t)
+                         (user-error "No word at point"))))
+
   (map! :leader
         (:prefix ("d" . "dictionary")
-         :desc "Lookup typed word" "s" #'sdcv-search-input
-         :desc "Lookup word at point" "S" #'sdcv-search-pointer))
+         :desc "Lookup in minibuffer" "s" #'yx-sdcv-message
+         :desc "Lookup word at point" "S" #'yx-sdcv-message-at-point
+         :desc "Lookup in buffer" "b" #'sdcv-search-input))
   ))
 
 (when (eq system-type 'darwin)
